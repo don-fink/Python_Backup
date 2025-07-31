@@ -1,6 +1,8 @@
-from PyQt5.QtCore import Qt 
-QApplication, QWidget, QLabel, QLineEdit, QPushButton,
-QVBoxLayout, QHBoxLayout, QFileDialog, QMenuBar, QAction
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QLabel, QLineEdit, QPushButton,
+    QVBoxLayout, QHBoxLayout, QFileDialog, QMenuBar, QAction
+)
 
 import sys
 import subprocess
