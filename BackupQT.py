@@ -186,6 +186,7 @@ class BackupApp(QWidget):
             self.save_settings()
         self.checkbox_log.stateChanged.connect(on_log_checkbox_changed)
         group_layout.addWidget(self.checkbox_log)
+        group_layout.addSpacing(25)  # Add vertical space between checkbox and buttons
         group_layout.addLayout(button_row)
         # Add more widgets here in the future as needed
         group_box.setLayout(group_layout)
