@@ -1,0 +1,46 @@
+QToolTip {
+    background-color: #f8fbff;
+    color: #0078D7;
+    border: 1px solid #0078D7;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 25px;
+}
+
+QPushButton {
+    border: 2px solid #0078D7;
+    border-radius: 8px;
+    padding: 8px;
+    background-color: #f8fbff;
+    font-size: 20px;
+    color: #0078D7;
+}
+QPushButton:hover {
+    background-color: #e6f2ff;
+    border-color: #005fa3;
+}
+QPushButton[objectName="button_cancel"] {
+    color: #d70022;
+    font-size: 20px;
+}
+QLineEdit {
+    border: 2px solid #0078D7;
+    border-radius: 8px;
+    padding: 8px;
+    background-color: #f8fbff;
+    font-size: 20px;
+}
+QGroupBox {
+    border: 2px solid #0078D7;
+    border-radius: 10px;
+    margin-top: 12px;
+    background-color: #f8fbff;
+    font-size: 16px;
+    font-weight: bold;
+    padding-top: 10px;
+}
+QGroupBox:title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 3px 0 3px;
+}

@@ -1,11 +1,11 @@
 {
     "window_size": [
-        981,
-        916
+        1669,
+        599
     ],
-    "source_dir": "C:/Users/donal/iCloudDrive/Dad's Photos for Facebook",
-    "destination_dir": "C:/Users/donal/OneDrive/Temporary",
+    "source_dir": "C:/Video Projects/2025 - Pennsylvania",
+    "destination_dir": "D:/Video Backup",
     "create_log": false,
-    "log_dir": "",
+    "log_dir": "C:/Users/donal/OneDrive/Desktop-Razer/Temp Log File.txt",
     "mirror": false
 }
