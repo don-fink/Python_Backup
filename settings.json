@@ -1,11 +1,12 @@
 {
     "window_size": [
-        1669,
-        610
+        1429,
+        584
     ],
-    "source_dir": "C:/Video Projects/2025 - Pennsylvania",
-    "destination_dir": "D:/Video Backup",
-    "create_log": false,
-    "log_dir": "C:/Users/donal/OneDrive/Desktop-Razer/2025-08-05_Log File.txt",
-    "mirror": false
+    "source_dir": "E:/Lightroom Catalogs",
+    "destination_dir": "F:/Lightroom Catalogs",
+    "create_log": true,
+    "log_dir": "F:/2025-08-05_Log File_Catalog.txt",
+    "mirror": false,
+    "selected_action": "Sync"
 }

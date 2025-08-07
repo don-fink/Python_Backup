@@ -2,16 +2,21 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QMenuBar, QAction, QGroupBox,
-    QDialog, QProgressBar, QMessageBox
+    QDialog, QProgressBar, QMessageBox, QCheckBox, QComboBox, QGridLayout
 )
+
 
 import sys
 import subprocess
 import os
 import json
 from dirsync import sync
+# Import help texts
+from help_texts import HELP_LOG_TITLE, HELP_LOG_TEXT, HELP_ACTIONS_TITLE, HELP_ACTIONS_TEXT
 
-SETTINGS_FILE = "settings.json"
+# BASE_DIR is the directory where this script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 
 
 
@@ -22,14 +27,19 @@ class BackupApp(QWidget):
         self.create_log = False  # Ensure attribute exists before any method uses it
         self.log_dir = ""
         self.mirror = False
+        self.selected_action = "Sync"  # Default value
         self.settings = self.load_settings()
         self.create_log = self.settings.get("create_log", False)
         self.log_dir = self.settings.get("log_dir", "")
         self.mirror = self.settings.get("mirror", False)
+        self.selected_action = self.settings.get("selected_action", "Sync")
         self.init_ui()
         self.resize(*self.settings["window_size"])
         self.entry_source.setText(self.settings["source_dir"])
         self.entry_destination.setText(self.settings["destination_dir"])
+        # Set combo_action after UI is initialized
+        if hasattr(self, "combo_action"):
+            self.combo_action.setCurrentText(self.selected_action)
 
     def load_settings(self):
         default_settings = {
@@ -38,7 +48,8 @@ class BackupApp(QWidget):
             "destination_dir": "",
             "create_log": False,
             "log_dir": "",
-            "mirror": False
+            "mirror": False,
+            "selected_action": "Sync"
         }
         if os.path.exists(SETTINGS_FILE):
             try:
@@ -50,16 +61,24 @@ class BackupApp(QWidget):
             settings = default_settings
             with open(SETTINGS_FILE, "w") as f:
                 json.dump(settings, f, indent=4)
+        # Ensure selected_action is present
+        if "selected_action" not in settings:
+            settings["selected_action"] = "Sync"
         return settings
     
     def save_settings(self):
+        # Get current action from combo_action if available
+        selected_action = "Sync"
+        if hasattr(self, "combo_action"):
+            selected_action = self.combo_action.currentText()
         settings = {
             "window_size": [self.width(), self.height()],
             "source_dir": self.entry_source.text(),
             "destination_dir": self.entry_destination.text(),
             "create_log": getattr(self, "create_log", False),
             "log_dir": getattr(self, "log_dir", ""),
-            "mirror": getattr(self, "mirror", False)
+            "mirror": getattr(self, "mirror", False),
+            "selected_action": selected_action
         }
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=4)
@@ -78,9 +97,12 @@ class BackupApp(QWidget):
 
         # Add Help menu (after menubar is created)
         help_menu = menubar.addMenu("Help")
-        help_action = QAction("How to Specify Log File", self)
-        help_action.triggered.connect(self.show_help_dialog)
-        help_menu.addAction(help_action)
+        help_log_action = QAction("How to Specify Log File", self)
+        help_log_action.triggered.connect(self.show_help_log_dialog)
+        help_menu.addAction(help_log_action)
+        help_actions_action = QAction("Backup Actions", self)
+        help_actions_action.triggered.connect(self.show_help_actions_dialog)
+        help_menu.addAction(help_actions_action)
     
         source_action = QAction("Source Folder", self)
         source_action.triggered.connect(self.browse_source)
@@ -171,9 +193,26 @@ class BackupApp(QWidget):
 
         # Center the button row in the group box
         group_layout = QVBoxLayout()
-        from PyQt5.QtWidgets import QCheckBox
+
+        # Create widgets first
         self.checkbox_log = QCheckBox("Create log file")
         self.checkbox_log.setChecked(self.create_log)
+        label_actions = QLabel("Backup Actions:")
+        label_actions.setObjectName("label_actions")
+        self.combo_action = QComboBox()
+        self.combo_action.addItems(["Sync", "Copy", "Archive"])
+        # Set initial value from settings
+        self.combo_action.setCurrentText(getattr(self, "selected_action", "Sync"))
+        self.combo_action.setToolTip("Select the backup action: Sync, Copy, or Archive.")
+        self.combo_action.setObjectName("combo_action")  # For style.qss styling
+
+        # Now create the layout and add widgets
+        log_action_row = QGridLayout()
+        log_action_row.addWidget(self.checkbox_log, 0, 0, alignment=Qt.AlignRight)
+        log_action_row.addWidget(label_actions, 0, 1, alignment=Qt.AlignRight)
+        log_action_row.addWidget(self.combo_action, 0, 2, alignment=Qt.AlignLeft)
+        group_layout.addLayout(log_action_row)
+
         # Disable if no log file path is set
         if not self.log_dir:
             self.checkbox_log.setEnabled(False)
@@ -185,8 +224,9 @@ class BackupApp(QWidget):
             self.create_log = bool(state)
             self.save_settings()
         self.checkbox_log.stateChanged.connect(on_log_checkbox_changed)
-        group_layout.addWidget(self.checkbox_log)
-        group_layout.addSpacing(25)  # Add vertical space between checkbox and buttons
+
+        group_layout.addLayout(log_action_row)
+        group_layout.addSpacing(25)
         group_layout.addLayout(button_row)
         # Add more widgets here in the future as needed
         group_box.setLayout(group_layout)
@@ -215,76 +255,130 @@ class BackupApp(QWidget):
         source_folder = self.entry_source.text()
         destination_folder = self.entry_destination.text()
 
-        # Validate paths
+
+        # Validate paths with dialog
         if not os.path.exists(source_folder) or not os.path.isdir(source_folder):
-            self.status_label.setText("Invalid source folder path.")
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Invalid Source Folder")
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText("The source folder path is invalid or does not exist.\n\nPlease select a valid source folder.")
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec_()
             return
         if not os.path.exists(destination_folder) or not os.path.isdir(destination_folder):
-            self.status_label.setText("Invalid destination folder path.")
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Invalid Destination Folder")
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText("The destination folder path is invalid or does not exist.\n\nPlease select a valid destination folder.")
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec_()
             return
 
-        # Gather all files to copy
-        files_to_copy = []
-        for dirpath, dirnames, filenames in os.walk(source_folder):
-            for f in filenames:
-                src_fp = os.path.join(dirpath, f)
-                rel_path = os.path.relpath(src_fp, source_folder)
-                dst_fp = os.path.join(destination_folder, rel_path)
-                files_to_copy.append((src_fp, dst_fp))
-
-        total_files = len(files_to_copy)
-        if total_files == 0:
-            self.status_label.setText("No files to backup.")
-            return
-
-        # Progress dialog
-        progress_dialog = QDialog(self)
-        progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        progress_dialog.setWindowTitle("Backup Progress")
-        progress_dialog.setWindowModality(Qt.ApplicationModal)
-        progress_dialog.setFixedSize(400, 120)
-        vbox = QVBoxLayout(progress_dialog)
-        label = QLabel("Backing up files...")
-        vbox.addWidget(label)
-        progress_bar = QProgressBar()
-        progress_bar.setMinimum(0)
-        progress_bar.setMaximum(total_files)
-        vbox.addWidget(progress_bar)
-        progress_dialog.show()
-        QApplication.processEvents()
-
-        import shutil
-        errors = []
-        for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
-            dst_dir = os.path.dirname(dst_fp)
-            if not os.path.exists(dst_dir):
-                os.makedirs(dst_dir, exist_ok=True)
-            try:
-                shutil.copy2(src_fp, dst_fp)
-            except Exception as e:
-                errors.append(f"{src_fp} -> {dst_fp}: {e}")
-            progress_bar.setValue(i)
-            QApplication.processEvents()
-
-        progress_dialog.close()
-
-        # Write log file if enabled and path is set
+        # Check log file path availability if logging is enabled
+        log_writable = True
+        log_error = None
         if getattr(self, 'create_log', False) and self.log_dir:
+            log_dirname = os.path.dirname(self.log_dir) or '.'
+            if not os.path.exists(log_dirname):
+                log_writable = False
+                log_error = f"The log file directory does not exist: {log_dirname}"
+            else:
+                try:
+                    # Try to open for writing (will not erase file, just test)
+                    with open(self.log_dir, 'a', encoding='utf-8'):
+                        pass
+                except Exception as e:
+                    log_writable = False
+                    log_error = f"Cannot write to log file: {e}"
+
+        if getattr(self, 'create_log', False) and self.log_dir and not log_writable:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Log File Not Available")
+            msg.setIcon(QMessageBox.Warning)
+            msg.setText(f"The log file cannot be created or written to.\n\n{log_error}\n\nDo you want to continue the backup without logging?")
+            msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Ok)
+            result = msg.exec_()
+            if result == QMessageBox.Cancel:
+                self.status_label.setText("Backup cancelled by user (log file not available).")
+                return
+            # If OK, proceed with backup but skip logging
+            log_writable = False
+
+        action = self.combo_action.currentText()
+        if action == "Sync":
+            # Use dirsync to mirror source to destination
             try:
-                with open(self.log_dir, 'w', encoding='utf-8') as logf:
-                    for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
-                        if i <= len(errors):
-                            logf.write(f"ERROR: {errors[i-1]}\n")
-                        else:
-                            logf.write(f"Copied: {src_fp} -> {dst_fp}\n")
+                sync(source_folder, destination_folder, 'sync')
+                self.status_label.setText("Sync completed successfully.")
             except Exception as e:
-                self.status_label.setText(f"Could not write log file: {e}")
+                self.status_label.setText(f"Sync failed: {e}")
+            # Optionally, add logging here
+        elif action == "Copy":
+            # Custom file-by-file copy (no delete at destination)
+            files_to_copy = []
+            for dirpath, dirnames, filenames in os.walk(source_folder):
+                for f in filenames:
+                    src_fp = os.path.join(dirpath, f)
+                    rel_path = os.path.relpath(src_fp, source_folder)
+                    dst_fp = os.path.join(destination_folder, rel_path)
+                    files_to_copy.append((src_fp, dst_fp))
+
+            total_files = len(files_to_copy)
+            if total_files == 0:
+                self.status_label.setText("No files to backup.")
                 return
 
-        if errors:
-            self.status_label.setText(f"Backup completed with errors. See log.")
-        else:
-            self.status_label.setText("Backup completed successfully.")
+            # Progress dialog
+            progress_dialog = QDialog(self)
+            progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            progress_dialog.setWindowTitle("Backup Progress")
+            progress_dialog.setWindowModality(Qt.ApplicationModal)
+            progress_dialog.setFixedSize(400, 120)
+            vbox = QVBoxLayout(progress_dialog)
+            label = QLabel("Copying files...")
+            vbox.addWidget(label)
+            progress_bar = QProgressBar()
+            progress_bar.setMinimum(0)
+            progress_bar.setMaximum(total_files)
+            vbox.addWidget(progress_bar)
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            import shutil
+            errors = []
+            for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
+                dst_dir = os.path.dirname(dst_fp)
+                if not os.path.exists(dst_dir):
+                    os.makedirs(dst_dir, exist_ok=True)
+                try:
+                    shutil.copy2(src_fp, dst_fp)
+                except Exception as e:
+                    errors.append(f"{src_fp} -> {dst_fp}: {e}")
+                progress_bar.setValue(i)
+                QApplication.processEvents()
+
+            progress_dialog.close()
+
+            # Write log file if enabled, path is set, and log_writable
+            if getattr(self, 'create_log', False) and self.log_dir and log_writable:
+                try:
+                    with open(self.log_dir, 'w', encoding='utf-8') as logf:
+                        for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
+                            if i <= len(errors):
+                                logf.write(f"ERROR: {errors[i-1]}\n")
+                            else:
+                                logf.write(f"Copied: {src_fp} -> {dst_fp}\n")
+                except Exception as e:
+                    self.status_label.setText(f"Could not write log file: {e}")
+                    return
+
+            if errors:
+                self.status_label.setText(f"Copy completed with errors. See log.")
+            else:
+                self.status_label.setText("Copy completed successfully.")
+        elif action == "Archive":
+            self.status_label.setText("Archive action not yet implemented.")
 
     def menu_settings(self):
         dlg = QDialog(self)
@@ -345,14 +439,23 @@ class BackupApp(QWidget):
         dlg.exec_()
 
     def show_help_dialog(self):
+        pass  # This function is now split into two below
+
+
+    def show_help_log_dialog(self):
         msg = QMessageBox(self)
-        msg.setWindowTitle("How to Specify Log File")
-        msg.setText(
-            "To specify a log file, open the Settings dialog from the File menu.\n\n"
-            "Click the 'Browse...' button to choose a folder and enter a file name for your log file. "
-            "You must provide a file name (e.g., backup_log.txt).\n\n"
-            "After selecting or entering the file name, click OK to save your choice."
-        )
+        msg.setWindowTitle(HELP_LOG_TITLE)
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(HELP_LOG_TEXT)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
+
+
+    def show_help_actions_dialog(self):
+        msg = QMessageBox(self)
+        msg.setWindowTitle(HELP_ACTIONS_TITLE)
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(HELP_ACTIONS_TEXT)
         msg.setIcon(QMessageBox.Information)
         msg.exec_()
         
