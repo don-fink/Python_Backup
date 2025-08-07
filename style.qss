@@ -44,3 +44,60 @@ QGroupBox:title {
     left: 10px;
     padding: 0 3px 0 3px;
 }
+
+QComboBox {
+    border: 2px solid #0078D7;
+    border-radius: 8px;
+    padding: 8px;
+    background-color: #f8fbff;
+    font-size: 20px;
+    color: #000000;
+}
+
+QComboBox#combo_action::down-arrow {
+    image: url(graphics/down_arrow_32.png);
+    width: 24px;
+    height: 24px;
+}
+
+
+QComboBox#combo_action::drop-down {
+    width: 36px;
+    border: none;
+    border-left: 2px solid #0078D7; /* Only left border, matches main box */
+}
+
+
+QLabel {
+    font-size: 20px;
+    color: #000000;
+    padding-right: 0px;
+}
+
+QMessageBox {
+    background-color: #f8f8ff;
+    border: 2px solid #4a90e2;
+    border-radius: 10px;
+}
+
+QMessageBox QLabel {
+    color: #222244;
+    font-size: 20px;
+    font-weight: normal;
+}
+
+QMessageBox QPushButton {
+    background-color: #4a90e2;
+    color: white;
+    border-radius: 6px;
+    padding: 6px 18px;
+    font-size: 25px;
+}
+
+QMessageBox QPushButton:hover {
+    background-color: #357ab8;
+}
+
+QMessageBox QPushButton:pressed {
+    background-color: #285a8c;
+}
