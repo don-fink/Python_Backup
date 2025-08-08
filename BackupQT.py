@@ -311,9 +311,17 @@ class BackupApp(QWidget):
             try:
                 sync(source_folder, destination_folder, 'sync')
                 self.status_label.setText("Sync completed successfully.")
+                # Write log file if enabled, path is set, and log_writable
+                if getattr(self, 'create_log', False) and self.log_dir and log_writable:
+                    try:
+                        with open(self.log_dir, 'w', encoding='utf-8') as logf:
+                            logf.write(f"Sync completed from {source_folder} to {destination_folder}\n")
+                    except Exception as e:
+                        self.status_label.setText(f"Could not write log file: {e}")
+                        return
             except Exception as e:
                 self.status_label.setText(f"Sync failed: {e}")
-            # Optionally, add logging here
+
         elif action == "Copy":
             # Custom file-by-file copy (no delete at destination)
             files_to_copy = []
@@ -377,6 +385,7 @@ class BackupApp(QWidget):
                 self.status_label.setText(f"Copy completed with errors. See log.")
             else:
                 self.status_label.setText("Copy completed successfully.")
+
         elif action == "Archive":
             self.status_label.setText("Archive action not yet implemented.")
 

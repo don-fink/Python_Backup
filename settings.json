@@ -3,10 +3,10 @@
         1429,
         584
     ],
-    "source_dir": "E:/Lightroom Catalogs",
-    "destination_dir": "F:/Lightroom Catalogs",
+    "source_dir": "C:/Video Projects/2025 - Pennsylvania",
+    "destination_dir": "D:/2025 - Pennsylvania",
     "create_log": true,
-    "log_dir": "F:/2025-08-05_Log File_Catalog.txt",
+    "log_dir": "D:/BackUp_Log_2025-08-08/2025-08-08-Sync Logging.txt",
     "mirror": false,
-    "selected_action": "Sync"
+    "selected_action": "Copy"
 }
