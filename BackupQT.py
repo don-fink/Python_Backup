@@ -1,11 +1,9 @@
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QThread, pyqtSignal, QObject, Qt
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QMenuBar, QAction, QGroupBox,
     QDialog, QProgressBar, QMessageBox, QCheckBox, QComboBox, QGridLayout
 )
-
-
 import sys
 import subprocess
 import os
@@ -18,8 +16,49 @@ from help_texts import HELP_LOG_TITLE, HELP_LOG_TEXT, HELP_ACTIONS_TITLE, HELP_A
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 
+# Worker class for running copy in a background thread
+class CopyWorker(QObject):
+    finished = pyqtSignal(list, list)
+    error = pyqtSignal(Exception)
 
+    def __init__(self, files_to_copy):
+        super().__init__()
+        self.files_to_copy = files_to_copy
+        self.errors = []
 
+    def run(self):
+        import shutil
+        for i, (src_fp, dst_fp) in enumerate(self.files_to_copy, 1):
+            dst_dir = os.path.dirname(dst_fp)
+            if not os.path.exists(dst_dir):
+                os.makedirs(dst_dir, exist_ok=True)
+            try:
+                shutil.copy2(src_fp, dst_fp)
+            except Exception as e:
+                self.errors.append(f"{src_fp} -> {dst_fp}: {e}")
+        self.finished.emit(self.files_to_copy, self.errors)
+    # ...existing code...
+
+# Worker class for running sync in a background thread
+class SyncWorker(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(Exception)
+
+    def __init__(self, source_folder, destination_folder):
+        super().__init__()
+        self.source_folder = source_folder
+        self.destination_folder = destination_folder
+        self._exception = None
+
+    def run(self):
+        try:
+            sync(self.source_folder, self.destination_folder, 'sync')
+        except Exception as e:
+            self._exception = e
+            self.error.emit(e)
+        finally:
+            self.finished.emit()
+    # ...existing code...
 
 class BackupApp(QWidget):
     def __init__(self):
@@ -300,27 +339,73 @@ class BackupApp(QWidget):
             msg.setDefaultButton(QMessageBox.Ok)
             result = msg.exec_()
             if result == QMessageBox.Cancel:
-                self.status_label.setText("Backup cancelled by user (log file not available).")
                 return
             # If OK, proceed with backup but skip logging
             log_writable = False
 
         action = self.combo_action.currentText()
         if action == "Sync":
-            # Use dirsync to mirror source to destination
-            try:
-                sync(source_folder, destination_folder, 'sync')
-                self.status_label.setText("Sync completed successfully.")
-                # Write log file if enabled, path is set, and log_writable
-                if getattr(self, 'create_log', False) and self.log_dir and log_writable:
-                    try:
-                        with open(self.log_dir, 'w', encoding='utf-8') as logf:
-                            logf.write(f"Sync completed from {source_folder} to {destination_folder}\n")
-                    except Exception as e:
-                        self.status_label.setText(f"Could not write log file: {e}")
-                        return
-            except Exception as e:
-                self.status_label.setText(f"Sync failed: {e}")
+            # Show a simple dialog with 'Working...' message while syncing, but run sync in a background thread
+            progress_dialog = QDialog(self)
+            progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            progress_dialog.setWindowTitle("Sync Progress")
+            progress_dialog.setWindowModality(Qt.ApplicationModal)
+            progress_dialog.setFixedSize(400, 100)
+            vbox = QVBoxLayout(progress_dialog)
+            label = QLabel("Working... Please wait while syncing.")
+            label.setAlignment(Qt.AlignCenter)
+            vbox.addWidget(label)
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            # Set up worker and thread
+            self.sync_thread = QThread()
+            self.sync_worker = SyncWorker(source_folder, destination_folder)
+            self.sync_worker.moveToThread(self.sync_thread)
+
+            def on_finished():
+                progress_dialog.close()
+                self.sync_thread.quit()
+                self.sync_thread.wait()
+                # If there was an error, it will be handled by error signal
+                if not hasattr(self.sync_worker, '_exception') or self.sync_worker._exception is None:
+                    # Write log file if enabled, path is set, and log_writable
+                    if getattr(self, 'create_log', False) and self.log_dir and log_writable:
+                        try:
+                            with open(self.log_dir, 'w', encoding='utf-8') as logf:
+                                logf.write(f"Sync completed from {source_folder} to {destination_folder}\n")
+                        except Exception as e:
+                            msg = QMessageBox(self)
+                            msg.setWindowTitle("Log File Error")
+                            msg.setIcon(QMessageBox.Warning)
+                            msg.setText(f"Could not write log file: {e}")
+                            msg.setStandardButtons(QMessageBox.Ok)
+                            msg.exec_()
+                            return
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Sync Completed Successfully")
+                    msg.setIcon(QMessageBox.Information)
+                    msg.setText("Sync completed successfully.")
+                    msg.setStandardButtons(QMessageBox.Ok)
+                    msg.exec_()
+
+            def on_error(e):
+                progress_dialog.close()
+                self.sync_thread.quit()
+                self.sync_thread.wait()
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Sync Failed")
+                msg.setIcon(QMessageBox.Critical)
+                msg.setText(f"Sync failed: {e}")
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec_()
+
+            self.sync_thread.started.connect(self.sync_worker.run)
+            self.sync_worker.finished.connect(on_finished)
+            self.sync_worker.error.connect(on_error)
+            self.sync_worker.finished.connect(self.sync_worker.deleteLater)
+            self.sync_thread.finished.connect(self.sync_thread.deleteLater)
+            self.sync_thread.start()
 
         elif action == "Copy":
             # Custom file-by-file copy (no delete at destination)
@@ -334,7 +419,6 @@ class BackupApp(QWidget):
 
             total_files = len(files_to_copy)
             if total_files == 0:
-                self.status_label.setText("No files to backup.")
                 return
 
             # Progress dialog
@@ -353,38 +437,64 @@ class BackupApp(QWidget):
             progress_dialog.show()
             QApplication.processEvents()
 
-            import shutil
-            errors = []
-            for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
-                dst_dir = os.path.dirname(dst_fp)
-                if not os.path.exists(dst_dir):
-                    os.makedirs(dst_dir, exist_ok=True)
-                try:
-                    shutil.copy2(src_fp, dst_fp)
-                except Exception as e:
-                    errors.append(f"{src_fp} -> {dst_fp}: {e}")
-                progress_bar.setValue(i)
+            # Set up worker and thread
+            self.copy_thread = QThread()
+            self.copy_worker = CopyWorker(files_to_copy)
+            self.copy_worker.moveToThread(self.copy_thread)
+
+            def on_finished(files_to_copy, errors):
+                progress_dialog.close()
+                self.copy_thread.quit()
+                self.copy_thread.wait()
+                # Write log file if enabled, path is set, and log_writable
+                if getattr(self, 'create_log', False) and self.log_dir and log_writable:
+                    try:
+                        with open(self.log_dir, 'w', encoding='utf-8') as logf:
+                            for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
+                                if i <= len(errors):
+                                    logf.write(f"ERROR: {errors[i-1]}\n")
+                                else:
+                                    logf.write(f"Copied: {src_fp} -> {dst_fp}\n")
+                    except Exception as e:
+                        return
+                if errors:
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Copy Completed With Errors")
+                    msg.setIcon(QMessageBox.Warning)
+                    msg.setText("Copy completed with errors. See log.")
+                    msg.setStandardButtons(QMessageBox.Ok)
+                    msg.exec_()
+                else:
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Copy Completed Successfully")
+                    msg.setIcon(QMessageBox.Information)
+                    msg.setText("Copy completed successfully.")
+                    msg.setStandardButtons(QMessageBox.Ok)
+                    msg.exec_()
+
+            def update_progress():
+                # This is a polling update, since the worker does not emit per-file progress
+                # We'll use a timer to update the progress bar based on files copied so far
+                if hasattr(self.copy_worker, 'errors'):
+                    copied = len(files_to_copy) - len(self.copy_worker.errors)
+                else:
+                    copied = 0
+                progress_bar.setValue(copied)
                 QApplication.processEvents()
 
-            progress_dialog.close()
+            self.copy_thread.started.connect(self.copy_worker.run)
+            self.copy_worker.finished.connect(on_finished)
+            self.copy_worker.finished.connect(self.copy_worker.deleteLater)
+            self.copy_thread.finished.connect(self.copy_thread.deleteLater)
 
-            # Write log file if enabled, path is set, and log_writable
-            if getattr(self, 'create_log', False) and self.log_dir and log_writable:
-                try:
-                    with open(self.log_dir, 'w', encoding='utf-8') as logf:
-                        for i, (src_fp, dst_fp) in enumerate(files_to_copy, 1):
-                            if i <= len(errors):
-                                logf.write(f"ERROR: {errors[i-1]}\n")
-                            else:
-                                logf.write(f"Copied: {src_fp} -> {dst_fp}\n")
-                except Exception as e:
-                    self.status_label.setText(f"Could not write log file: {e}")
-                    return
-
-            if errors:
-                self.status_label.setText(f"Copy completed with errors. See log.")
-            else:
-                self.status_label.setText("Copy completed successfully.")
+            # Start a timer to update the progress bar (simulate progress)
+            from PyQt5.QtCore import QTimer
+            self.copy_progress_timer = QTimer()
+            self.copy_progress_timer.setInterval(200)
+            self.copy_progress_timer.timeout.connect(update_progress)
+            self.copy_worker.finished.connect(self.copy_progress_timer.stop)
+            self.copy_thread.start()
+            self.copy_progress_timer.start()
 
         elif action == "Archive":
             self.status_label.setText("Archive action not yet implemented.")
