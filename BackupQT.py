@@ -8,7 +8,9 @@ import sys
 import subprocess
 import os
 import json
-from dirsync import sync
+import shutil
+import re
+
 # Import help texts
 from help_texts import HELP_LOG_TITLE, HELP_LOG_TEXT, HELP_ACTIONS_TITLE, HELP_ACTIONS_TEXT
 
@@ -27,7 +29,6 @@ class CopyWorker(QObject):
         self.errors = []
 
     def run(self):
-        import shutil
         for i, (src_fp, dst_fp) in enumerate(self.files_to_copy, 1):
             dst_dir = os.path.dirname(dst_fp)
             if not os.path.exists(dst_dir):
@@ -39,7 +40,19 @@ class CopyWorker(QObject):
         self.finished.emit(self.files_to_copy, self.errors)
     # ...existing code...
 
-# Worker class for running sync in a background thread
+# Helper function to convert Windows path to WSL path
+def win_to_wsl_path(win_path):
+    # Normalize slashes
+    path = win_path.replace('\\', '/')
+    # Match drive letter
+    match = re.match(r'^([A-Za-z]):/(.*)', path)
+    if match:
+        drive = match.group(1).lower()
+        rest = match.group(2)
+        return f"/mnt/{drive}/{rest}"
+    return path
+
+# Worker class for running sync in a background thread using rsync via WSL
 class SyncWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(Exception)
@@ -52,7 +65,24 @@ class SyncWorker(QObject):
 
     def run(self):
         try:
-            sync(self.source_folder, self.destination_folder, 'sync')
+            src = win_to_wsl_path(self.source_folder)
+            dst = win_to_wsl_path(self.destination_folder)
+            # Remove any trailing backslashes (shouldn't be present, but just in case)
+            src = src.rstrip('\\')
+            dst = dst.rstrip('\\')
+            # Ensure trailing slash for rsync source (for directory contents)
+            if not src.endswith('/'):
+                src += '/'
+            # Do NOT add trailing slash to destination (rsync expects the directory itself)
+            cmd = ["wsl", "rsync", "-a", "--delete", src, dst]
+            # Print command for debugging (optional)
+            # print('Running:', ' '.join(cmd))
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                self._exception = Exception(result.stderr + '\n' + result.stdout)
+                self.error.emit(self._exception)
+            else:
+                self._exception = None
         except Exception as e:
             self._exception = e
             self.error.emit(e)
