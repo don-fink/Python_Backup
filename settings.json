@@ -8,5 +8,5 @@
     "create_log": true,
     "log_dir": "D:/BackUp_Log_2025-08-08/2025-08-11-Rsync.txt",
     "mirror": false,
-    "selected_action": "Sync"
+    "selected_action": "Archive"
 }
