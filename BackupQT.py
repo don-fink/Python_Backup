@@ -24,6 +24,7 @@ SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 class CopyWorker(QObject):
     finished = pyqtSignal(list, list)
     error = pyqtSignal(Exception)
+    progress = pyqtSignal(str)
 
     def __init__(self, files_to_copy):
         super().__init__()
@@ -32,6 +33,7 @@ class CopyWorker(QObject):
 
     def run(self):
         for i, (src_fp, dst_fp) in enumerate(self.files_to_copy, 1):
+            self.progress.emit(src_fp)
             dst_dir = os.path.dirname(dst_fp)
             if not os.path.exists(dst_dir):
                 os.makedirs(dst_dir, exist_ok=True)
@@ -59,6 +61,7 @@ class SyncWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(Exception)
 
+    progress = pyqtSignal(str)
     def __init__(self, source_folder, destination_folder, log_enabled=False, log_path=None):
         super().__init__()
         self.source_folder = source_folder
@@ -75,14 +78,41 @@ class SyncWorker(QObject):
             dst = dst.rstrip('\\')
             if not src.endswith('/'):
                 src += '/'
-            cmd = ["wsl", "rsync", "-a", "--delete"]
+            cmd = ["wsl", "rsync", "-a", "--delete", "--itemize-changes"]
             # Add log file option if enabled
             if self.log_enabled and self.log_path:
                 cmd += [f"--log-file={self.log_path}"]
             cmd += [src, dst]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                self._exception = Exception(result.stderr + '\n' + result.stdout)
+
+            # Run rsync and parse output line by line
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if line:
+                    # Parse rsync --itemize-changes output
+                    # Example: '>f+++++++++ filename.txt' means new file
+                    if len(line) > 12:
+                        action_code = line[:12]
+                        filename = line[12:].strip()
+                        action = ''
+                        if action_code.startswith('>f+++++++++'): action = 'New file'
+                        elif action_code.startswith('>f..t......'): action = 'Updated timestamp'
+                        elif action_code.startswith('>f.s.......'): action = 'Updated size'
+                        elif action_code.startswith('>f..p......'): action = 'Updated permissions'
+                        elif action_code.startswith('cd+++++++++'): action = 'New directory'
+                        elif action_code.startswith('*deleting '): action = 'Deleted'
+                        else: action = 'Changed'
+                        self.progress.emit(f"{action}: {filename}")
+                    else:
+                        self.progress.emit(line)
+            process.wait()
+            if process.returncode != 0:
+                stderr = process.stderr.read()
+                stdout = process.stdout.read()
+                self._exception = Exception(stderr + '\n' + stdout)
                 self.error.emit(self._exception)
             else:
                 self._exception = None
@@ -276,7 +306,7 @@ class BackupApp(QWidget):
         label_actions = QLabel("Backup Actions:")
         label_actions.setObjectName("label_actions")
         self.combo_action = QComboBox()
-        self.combo_action.addItems(["Sync", "Copy", "Archive"])
+        self.combo_action.addItems(["Copy", "Sync", "Archive"])
         # Set initial value from settings
         self.combo_action.setCurrentText(getattr(self, "selected_action", "Sync"))
         self.combo_action.setToolTip("Select the backup action: Sync, Copy, or Archive.")
@@ -287,7 +317,6 @@ class BackupApp(QWidget):
         log_action_row.addWidget(self.checkbox_log, 0, 0, alignment=Qt.AlignRight)
         log_action_row.addWidget(label_actions, 0, 1, alignment=Qt.AlignRight)
         log_action_row.addWidget(self.combo_action, 0, 2, alignment=Qt.AlignLeft)
-        group_layout.addLayout(log_action_row)
 
         # Disable if no log file path is set
         if not self.log_dir:
@@ -301,6 +330,7 @@ class BackupApp(QWidget):
             self.save_settings()
         self.checkbox_log.stateChanged.connect(on_log_checkbox_changed)
 
+        # Only add log_action_row once
         group_layout.addLayout(log_action_row)
         group_layout.addSpacing(25)
         group_layout.addLayout(button_row)
@@ -398,16 +428,18 @@ class BackupApp(QWidget):
                 # Convert log path to WSL path for RSYNC
                 log_path = win_to_wsl_path(log_path_win)
 
-            # Show a simple dialog with 'Working...' message while syncing, but run sync in a background thread
+            # Show a dialog with file/action feedback while syncing
             progress_dialog = QDialog(self)
             progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
             progress_dialog.setWindowTitle("Sync Progress")
             progress_dialog.setWindowModality(Qt.ApplicationModal)
-            progress_dialog.setFixedSize(400, 100)
+            progress_dialog.setFixedSize(1000, 180)
             vbox = QVBoxLayout(progress_dialog)
-            label = QLabel("Working... Please wait while syncing.")
-            label.setAlignment(Qt.AlignCenter)
+            label = QLabel("Syncing files...")
             vbox.addWidget(label)
+            current_file_label = QLabel("")
+            current_file_label.setWordWrap(True)
+            vbox.addWidget(current_file_label)
             progress_dialog.show()
             QApplication.processEvents()
 
@@ -438,11 +470,16 @@ class BackupApp(QWidget):
                 msg.setStandardButtons(QMessageBox.Ok)
                 msg.exec_()
 
+            def on_progress(text):
+                current_file_label.setText(text)
+                QApplication.processEvents()
+
             self.sync_thread.started.connect(self.sync_worker.run)
             self.sync_worker.finished.connect(on_finished)
             self.sync_worker.error.connect(on_error)
             self.sync_worker.finished.connect(self.sync_worker.deleteLater)
             self.sync_thread.finished.connect(self.sync_thread.deleteLater)
+            self.sync_worker.progress.connect(on_progress)
             self.sync_thread.start()
 
         elif action == "Copy":
@@ -464,14 +501,13 @@ class BackupApp(QWidget):
             progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
             progress_dialog.setWindowTitle("Backup Progress")
             progress_dialog.setWindowModality(Qt.ApplicationModal)
-            progress_dialog.setFixedSize(400, 120)
+            progress_dialog.setFixedSize(1000, 180)
             vbox = QVBoxLayout(progress_dialog)
             label = QLabel("Copying files...")
             vbox.addWidget(label)
-            progress_bar = QProgressBar()
-            progress_bar.setMinimum(0)
-            progress_bar.setMaximum(total_files)
-            vbox.addWidget(progress_bar)
+            current_file_label = QLabel("")
+            current_file_label.setWordWrap(True)
+            vbox.addWidget(current_file_label)
             progress_dialog.show()
             QApplication.processEvents()
 
@@ -510,32 +546,128 @@ class BackupApp(QWidget):
                     msg.setStandardButtons(QMessageBox.Ok)
                     msg.exec_()
 
-            def update_progress():
-                # This is a polling update, since the worker does not emit per-file progress
-                # We'll use a timer to update the progress bar based on files copied so far
-                if hasattr(self.copy_worker, 'errors'):
-                    copied = len(files_to_copy) - len(self.copy_worker.errors)
-                else:
-                    copied = 0
-                progress_bar.setValue(copied)
+
+
+            def on_progress(current_file):
+                current_file_label.setText(f"Current file: {current_file}")
                 QApplication.processEvents()
 
             self.copy_thread.started.connect(self.copy_worker.run)
             self.copy_worker.finished.connect(on_finished)
             self.copy_worker.finished.connect(self.copy_worker.deleteLater)
             self.copy_thread.finished.connect(self.copy_thread.deleteLater)
+            self.copy_worker.progress.connect(on_progress)
 
             # Start a timer to update the progress bar (simulate progress)
             from PyQt5.QtCore import QTimer
-            self.copy_progress_timer = QTimer()
-            self.copy_progress_timer.setInterval(200)
-            self.copy_progress_timer.timeout.connect(update_progress)
-            self.copy_worker.finished.connect(self.copy_progress_timer.stop)
             self.copy_thread.start()
-            self.copy_progress_timer.start()
 
         elif action == "Archive":
-            self.status_label.setText("Archive action not yet implemented.")
+                # Archive logic
+                import glob
+                from datetime import datetime
+                dest_dir = destination_folder.rstrip('\\/')
+                archive_dir = dest_dir + "-Archive"
+                if not os.path.exists(archive_dir):
+                    os.makedirs(archive_dir, exist_ok=True)
+
+                # Create timestamped backup subdirectory
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                base_name = os.path.basename(dest_dir)
+                session_dir_name = f"{base_name}-{timestamp}"
+                session_dir = os.path.join(archive_dir, session_dir_name)
+                os.makedirs(session_dir, exist_ok=True)
+
+                # Rotate: keep only 5 most recent session dirs
+                pattern = os.path.join(archive_dir, f"{base_name}-*")
+                session_dirs = sorted(glob.glob(pattern), key=os.path.getmtime)
+                if len(session_dirs) >= 5:
+                    for old_dir in session_dirs[:-4]:
+                        try:
+                            shutil.rmtree(old_dir)
+                        except Exception:
+                            pass
+
+                # Prepare rsync command with --backup and --backup-dir
+                src = win_to_wsl_path(source_folder)
+                dst = win_to_wsl_path(destination_folder)
+                backup_dir_wsl = win_to_wsl_path(session_dir)
+                src = src.rstrip('\\')
+                dst = dst.rstrip('\\')
+                if not src.endswith('/'):
+                    src += '/'
+                cmd = [
+                    "wsl", "rsync", "-a", "--delete", "--backup", f"--backup-dir={backup_dir_wsl}"
+                ]
+                # Optionally add log file
+                log_enabled = getattr(self, 'create_log', False)
+                log_path = None
+                if log_enabled:
+                    log_file_name = f"Log-{timestamp}.txt"
+                    log_path_win = os.path.join(session_dir, log_file_name)
+                    log_path = win_to_wsl_path(log_path_win)
+                    cmd.append(f"--log-file={log_path}")
+                cmd += [src, dst]
+
+                # Show progress dialog
+                progress_dialog = QDialog(self)
+                progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+                progress_dialog.setWindowTitle("Archive Progress")
+                progress_dialog.setWindowModality(Qt.ApplicationModal)
+                progress_dialog.setFixedSize(400, 100)
+                vbox = QVBoxLayout(progress_dialog)
+                label = QLabel("Archiving... Please wait.")
+                label.setAlignment(Qt.AlignCenter)
+                vbox.addWidget(label)
+                progress_dialog.show()
+                QApplication.processEvents()
+
+                # Run rsync in background thread
+                class ArchiveWorker(QObject):
+                    finished = pyqtSignal()
+                    error = pyqtSignal(Exception)
+                    def run(self):
+                        try:
+                            result = subprocess.run(cmd, capture_output=True, text=True)
+                            if result.returncode != 0:
+                                self.error.emit(Exception(result.stderr + '\n' + result.stdout))
+                            else:
+                                self.finished.emit()
+                        except Exception as e:
+                            self.error.emit(e)
+
+                self.archive_thread = QThread()
+                self.archive_worker = ArchiveWorker()
+                self.archive_worker.moveToThread(self.archive_thread)
+
+                def on_finished():
+                    progress_dialog.close()
+                    self.archive_thread.quit()
+                    self.archive_thread.wait()
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Archive Completed Successfully")
+                    msg.setIcon(QMessageBox.Information)
+                    msg.setText("Archive completed successfully.")
+                    msg.setStandardButtons(QMessageBox.Ok)
+                    msg.exec_()
+
+                def on_error(e):
+                    progress_dialog.close()
+                    self.archive_thread.quit()
+                    self.archive_thread.wait()
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Archive Failed")
+                    msg.setIcon(QMessageBox.Critical)
+                    msg.setText(f"Archive failed: {e}")
+                    msg.setStandardButtons(QMessageBox.Ok)
+                    msg.exec_()
+
+                self.archive_thread.started.connect(self.archive_worker.run)
+                self.archive_worker.finished.connect(on_finished)
+                self.archive_worker.error.connect(on_error)
+                self.archive_worker.finished.connect(self.archive_worker.deleteLater)
+                self.archive_thread.finished.connect(self.archive_thread.deleteLater)
+                self.archive_thread.start()
 
     def menu_settings(self):
         dlg = QDialog(self)
