@@ -1,12 +1,12 @@
 {
     "window_size": [
         1423,
-        667
+        572
     ],
-    "source_dir": "C:/Video Projects/2025 - Pennsylvania",
-    "destination_dir": "D:/2025 - Pennsylvania",
+    "source_dir": "E:/Camera Downloads",
+    "destination_dir": "F:/Camera Downloads",
     "create_log": true,
-    "log_dir": "D:/BackUp_Log_2025-08-08/2025-08-11-Rsync.txt",
+    "log_dir": "F:/2025-08-30.txt",
     "mirror": false,
-    "selected_action": "Archive"
+    "selected_action": "Sync"
 }

@@ -4,12 +4,14 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFileDialog, QMenuBar, QAction, QGroupBox,
     QDialog, QProgressBar, QMessageBox, QCheckBox, QComboBox, QGridLayout
 )
+
 import sys
 import subprocess
 import os
 import json
 import shutil
 import re
+import platform
 
 # Import help texts
 from help_texts import HELP_LOG_TITLE, HELP_LOG_TEXT, HELP_ACTIONS_TITLE, HELP_ACTIONS_TEXT
@@ -57,26 +59,27 @@ class SyncWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(Exception)
 
-    def __init__(self, source_folder, destination_folder):
+    def __init__(self, source_folder, destination_folder, log_enabled=False, log_path=None):
         super().__init__()
         self.source_folder = source_folder
         self.destination_folder = destination_folder
+        self.log_enabled = log_enabled
+        self.log_path = log_path
         self._exception = None
 
     def run(self):
         try:
             src = win_to_wsl_path(self.source_folder)
             dst = win_to_wsl_path(self.destination_folder)
-            # Remove any trailing backslashes (shouldn't be present, but just in case)
             src = src.rstrip('\\')
             dst = dst.rstrip('\\')
-            # Ensure trailing slash for rsync source (for directory contents)
             if not src.endswith('/'):
                 src += '/'
-            # Do NOT add trailing slash to destination (rsync expects the directory itself)
-            cmd = ["wsl", "rsync", "-a", "--delete", src, dst]
-            # Print command for debugging (optional)
-            # print('Running:', ' '.join(cmd))
+            cmd = ["wsl", "rsync", "-a", "--delete"]
+            # Add log file option if enabled
+            if self.log_enabled and self.log_path:
+                cmd += [f"--log-file={self.log_path}"]
+            cmd += [src, dst]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 self._exception = Exception(result.stderr + '\n' + result.stdout)
@@ -90,9 +93,12 @@ class SyncWorker(QObject):
             self.finished.emit()
     # ...existing code...
 
+
 class BackupApp(QWidget):
     def __init__(self):
         super().__init__()
+        # Detect OS
+        self.os_name = platform.system()
         self.create_log = False  # Ensure attribute exists before any method uses it
         self.log_dir = ""
         self.mirror = False
@@ -157,7 +163,8 @@ class BackupApp(QWidget):
         event.accept()
 
     def init_ui(self):
-        self.setWindowTitle("Backup Script")
+        # Show OS in window title for demonstration
+        self.setWindowTitle(f"Backup Script - OS: {self.os_name}")
         self.resize(1200, 600)
 
         # Menu Bar
@@ -375,6 +382,22 @@ class BackupApp(QWidget):
 
         action = self.combo_action.currentText()
         if action == "Sync":
+            # Prepare log file path if logging is enabled
+            log_enabled = getattr(self, 'create_log', False)
+            log_path = None
+            if log_enabled:
+                # Use destination directory for log directory
+                dest_dir = destination_folder.rstrip('\\/')
+                archive_dir = dest_dir + "-archive"
+                if not os.path.exists(archive_dir):
+                    os.makedirs(archive_dir, exist_ok=True)
+                # Log file name: Log-YYYY-MM-DD.txt
+                from datetime import datetime
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                log_path_win = os.path.join(archive_dir, f"Log-{today_str}.txt")
+                # Convert log path to WSL path for RSYNC
+                log_path = win_to_wsl_path(log_path_win)
+
             # Show a simple dialog with 'Working...' message while syncing, but run sync in a background thread
             progress_dialog = QDialog(self)
             progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
@@ -390,34 +413,19 @@ class BackupApp(QWidget):
 
             # Set up worker and thread
             self.sync_thread = QThread()
-            self.sync_worker = SyncWorker(source_folder, destination_folder)
+            self.sync_worker = SyncWorker(source_folder, destination_folder, log_enabled, log_path)
             self.sync_worker.moveToThread(self.sync_thread)
 
             def on_finished():
                 progress_dialog.close()
                 self.sync_thread.quit()
                 self.sync_thread.wait()
-                # If there was an error, it will be handled by error signal
-                if not hasattr(self.sync_worker, '_exception') or self.sync_worker._exception is None:
-                    # Write log file if enabled, path is set, and log_writable
-                    if getattr(self, 'create_log', False) and self.log_dir and log_writable:
-                        try:
-                            with open(self.log_dir, 'w', encoding='utf-8') as logf:
-                                logf.write(f"Sync completed from {source_folder} to {destination_folder}\n")
-                        except Exception as e:
-                            msg = QMessageBox(self)
-                            msg.setWindowTitle("Log File Error")
-                            msg.setIcon(QMessageBox.Warning)
-                            msg.setText(f"Could not write log file: {e}")
-                            msg.setStandardButtons(QMessageBox.Ok)
-                            msg.exec_()
-                            return
-                    msg = QMessageBox(self)
-                    msg.setWindowTitle("Sync Completed Successfully")
-                    msg.setIcon(QMessageBox.Information)
-                    msg.setText("Sync completed successfully.")
-                    msg.setStandardButtons(QMessageBox.Ok)
-                    msg.exec_()
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Sync Completed Successfully")
+                msg.setIcon(QMessageBox.Information)
+                msg.setText("Sync completed successfully.")
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec_()
 
             def on_error(e):
                 progress_dialog.close()
@@ -539,23 +547,7 @@ class BackupApp(QWidget):
         dlg.resize(int(main_width * 0.7), int(main_height * 0.4))
         layout = QVBoxLayout(dlg)
 
-        # Log file path row (styled like main window)
-        log_row = QHBoxLayout()
-        label = QLabel("Log file path:")
-        entry = QLineEdit()
-        entry.setText(self.log_dir)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.setFixedWidth(120)
-        browse_btn.setToolTip("Select the log file location")
-        def browse():
-            path, _ = QFileDialog.getSaveFileName(dlg, "Select Log File", entry.text(), "Text Files (*.txt);;All Files (*)")
-            if path:
-                entry.setText(path)
-        browse_btn.clicked.connect(browse)
-        log_row.addWidget(label)
-        log_row.addWidget(entry)
-        log_row.addWidget(browse_btn)
-        layout.addLayout(log_row)
+    # Log file path row removed; Settings dialog is now empty except for OK/Cancel buttons
 
         # OK/Cancel buttons
         btn_row = QHBoxLayout()
@@ -568,16 +560,7 @@ class BackupApp(QWidget):
         layout.addLayout(btn_row)
 
         def accept():
-            self.log_dir = entry.text()
             self.save_settings()
-            # Enable/disable log checkbox in main window
-            if hasattr(self, 'checkbox_log'):
-                if self.log_dir:
-                    self.checkbox_log.setEnabled(True)
-                    self.checkbox_log.setToolTip("Log file will be created at the specified path.")
-                else:
-                    self.checkbox_log.setEnabled(False)
-                    self.checkbox_log.setToolTip("Specify a log file path in Settings to enable logging.")
             dlg.accept()
         def reject():
             dlg.reject()
