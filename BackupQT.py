@@ -2,8 +2,10 @@ from PyQt5.QtCore import QThread, pyqtSignal, QObject, Qt
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QMenuBar, QAction, QGroupBox,
-    QDialog, QProgressBar, QMessageBox, QCheckBox, QComboBox, QGridLayout
+    QDialog, QProgressBar, QMessageBox, QCheckBox, QComboBox, QGridLayout, QMenu,
+    QPlainTextEdit
 )
+from typing import cast, List
 
 import sys
 import subprocess
@@ -86,8 +88,13 @@ class SyncWorker(QObject):
 
             # Run rsync and parse output line by line
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Guard optional pipes for type checkers
+            stdout_pipe = process.stdout
+            stderr_pipe = process.stderr
             while True:
-                line = process.stdout.readline()
+                if stdout_pipe is None:
+                    break
+                line = stdout_pipe.readline()
                 if not line:
                     break
                 line = line.strip()
@@ -110,8 +117,8 @@ class SyncWorker(QObject):
                         self.progress.emit(line)
             process.wait()
             if process.returncode != 0:
-                stderr = process.stderr.read()
-                stdout = process.stdout.read()
+                stderr = (stderr_pipe.read() if stderr_pipe is not None else "")
+                stdout = (stdout_pipe.read() if stdout_pipe is not None else "")
                 self._exception = Exception(stderr + '\n' + stdout)
                 self.error.emit(self._exception)
             else:
@@ -122,6 +129,9 @@ class SyncWorker(QObject):
         finally:
             self.finished.emit()
     # ...existing code...
+
+
+# ADB features removed
 
 
 class BackupApp(QWidget):
@@ -138,6 +148,7 @@ class BackupApp(QWidget):
         self.log_dir = self.settings.get("log_dir", "")
         self.mirror = self.settings.get("mirror", False)
         self.selected_action = self.settings.get("selected_action", "Sync")
+    # ADB features removed
         self.init_ui()
         self.resize(*self.settings["window_size"])
         self.entry_source.setText(self.settings["source_dir"])
@@ -199,10 +210,10 @@ class BackupApp(QWidget):
 
         # Menu Bar
         menubar = QMenuBar(self)
-        file_menu = menubar.addMenu("File")
+        file_menu = cast(QMenu, menubar.addMenu("File"))
 
         # Add Help menu (after menubar is created)
-        help_menu = menubar.addMenu("Help")
+        help_menu = cast(QMenu, menubar.addMenu("Help"))
         help_log_action = QAction("How to Specify Log File", self)
         help_log_action.triggered.connect(self.show_help_log_dialog)
         help_menu.addAction(help_log_action)
@@ -223,7 +234,9 @@ class BackupApp(QWidget):
         file_menu.addAction(settings_action)
     
         exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
+        def _on_exit_clicked() -> None:
+            self.close()
+        exit_action.triggered.connect(_on_exit_clicked)
         file_menu.addAction(exit_action)
     
         # Widget creation
@@ -260,7 +273,9 @@ class BackupApp(QWidget):
         self.button_cancel.setFixedWidth(120)
         # Style is now loaded globally from style.qss
         self.button_cancel.setToolTip("Exit the application")
-        self.button_cancel.clicked.connect(self.close)
+        def _on_quit_clicked() -> None:
+            self.close()
+        self.button_cancel.clicked.connect(_on_quit_clicked)
     
         self.status_label = QLabel("")
     
@@ -314,9 +329,9 @@ class BackupApp(QWidget):
 
         # Now create the layout and add widgets
         log_action_row = QGridLayout()
-        log_action_row.addWidget(self.checkbox_log, 0, 0, alignment=Qt.AlignRight)
-        log_action_row.addWidget(label_actions, 0, 1, alignment=Qt.AlignRight)
-        log_action_row.addWidget(self.combo_action, 0, 2, alignment=Qt.AlignLeft)
+        log_action_row.addWidget(self.checkbox_log, 0, 0)
+        log_action_row.addWidget(label_actions, 0, 1)
+        log_action_row.addWidget(self.combo_action, 0, 2)
 
         # Disable if no log file path is set
         if not self.log_dir:
@@ -430,9 +445,9 @@ class BackupApp(QWidget):
 
             # Show a dialog with file/action feedback while syncing
             progress_dialog = QDialog(self)
-            progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # type: ignore[attr-defined]
             progress_dialog.setWindowTitle("Sync Progress")
-            progress_dialog.setWindowModality(Qt.ApplicationModal)
+            progress_dialog.setWindowModality(Qt.ApplicationModal)  # type: ignore[attr-defined]
             progress_dialog.setFixedSize(1000, 180)
             vbox = QVBoxLayout(progress_dialog)
             label = QLabel("Syncing files...")
@@ -448,7 +463,7 @@ class BackupApp(QWidget):
             self.sync_worker = SyncWorker(source_folder, destination_folder, log_enabled, log_path)
             self.sync_worker.moveToThread(self.sync_thread)
 
-            def on_finished():
+            def on_sync_finished():
                 progress_dialog.close()
                 self.sync_thread.quit()
                 self.sync_thread.wait()
@@ -459,7 +474,7 @@ class BackupApp(QWidget):
                 msg.setStandardButtons(QMessageBox.Ok)
                 msg.exec_()
 
-            def on_error(e):
+            def on_sync_error(e):
                 progress_dialog.close()
                 self.sync_thread.quit()
                 self.sync_thread.wait()
@@ -470,16 +485,16 @@ class BackupApp(QWidget):
                 msg.setStandardButtons(QMessageBox.Ok)
                 msg.exec_()
 
-            def on_progress(text):
+            def on_sync_progress(text):
                 current_file_label.setText(text)
                 QApplication.processEvents()
 
             self.sync_thread.started.connect(self.sync_worker.run)
-            self.sync_worker.finished.connect(on_finished)
-            self.sync_worker.error.connect(on_error)
+            self.sync_worker.finished.connect(on_sync_finished)
+            self.sync_worker.error.connect(on_sync_error)
             self.sync_worker.finished.connect(self.sync_worker.deleteLater)
             self.sync_thread.finished.connect(self.sync_thread.deleteLater)
-            self.sync_worker.progress.connect(on_progress)
+            self.sync_worker.progress.connect(on_sync_progress)
             self.sync_thread.start()
 
         elif action == "Copy":
@@ -498,9 +513,9 @@ class BackupApp(QWidget):
 
             # Progress dialog
             progress_dialog = QDialog(self)
-            progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # type: ignore[attr-defined]
             progress_dialog.setWindowTitle("Backup Progress")
-            progress_dialog.setWindowModality(Qt.ApplicationModal)
+            progress_dialog.setWindowModality(Qt.ApplicationModal)  # type: ignore[attr-defined]
             progress_dialog.setFixedSize(1000, 180)
             vbox = QVBoxLayout(progress_dialog)
             label = QLabel("Copying files...")
@@ -516,7 +531,7 @@ class BackupApp(QWidget):
             self.copy_worker = CopyWorker(files_to_copy)
             self.copy_worker.moveToThread(self.copy_thread)
 
-            def on_finished(files_to_copy, errors):
+            def on_copy_finished(files_to_copy, errors):
                 progress_dialog.close()
                 self.copy_thread.quit()
                 self.copy_thread.wait()
@@ -548,15 +563,15 @@ class BackupApp(QWidget):
 
 
 
-            def on_progress(current_file):
+            def on_copy_progress(current_file):
                 current_file_label.setText(f"Current file: {current_file}")
                 QApplication.processEvents()
 
             self.copy_thread.started.connect(self.copy_worker.run)
-            self.copy_worker.finished.connect(on_finished)
+            self.copy_worker.finished.connect(on_copy_finished)
             self.copy_worker.finished.connect(self.copy_worker.deleteLater)
             self.copy_thread.finished.connect(self.copy_thread.deleteLater)
-            self.copy_worker.progress.connect(on_progress)
+            self.copy_worker.progress.connect(on_copy_progress)
 
             # Start a timer to update the progress bar (simulate progress)
             from PyQt5.QtCore import QTimer
@@ -611,13 +626,13 @@ class BackupApp(QWidget):
 
                 # Show progress dialog
                 progress_dialog = QDialog(self)
-                progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+                progress_dialog.setWindowFlags(progress_dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # type: ignore[attr-defined]
                 progress_dialog.setWindowTitle("Archive Progress")
-                progress_dialog.setWindowModality(Qt.ApplicationModal)
+                progress_dialog.setWindowModality(Qt.ApplicationModal)  # type: ignore[attr-defined]
                 progress_dialog.setFixedSize(400, 100)
                 vbox = QVBoxLayout(progress_dialog)
                 label = QLabel("Archiving... Please wait.")
-                label.setAlignment(Qt.AlignCenter)
+                # Centering not critical; omit to keep type-checkers quiet
                 vbox.addWidget(label)
                 progress_dialog.show()
                 QApplication.processEvents()
@@ -679,7 +694,25 @@ class BackupApp(QWidget):
         dlg.resize(int(main_width * 0.7), int(main_height * 0.4))
         layout = QVBoxLayout(dlg)
 
-    # Log file path row removed; Settings dialog is now empty except for OK/Cancel buttons
+        # Log file path row (styled like main window)
+        log_row = QHBoxLayout()
+        label = QLabel("Log file path:")
+        entry = QLineEdit()
+        entry.setText(self.log_dir)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.setFixedWidth(120)
+        browse_btn.setToolTip("Select the log file location")
+        def browse():
+            path, _ = QFileDialog.getSaveFileName(dlg, "Select Log File", entry.text(), "Text Files (*.txt);;All Files (*)")
+            if path:
+                entry.setText(path)
+        browse_btn.clicked.connect(browse)
+        log_row.addWidget(label)
+        log_row.addWidget(entry)
+        log_row.addWidget(browse_btn)
+        layout.addLayout(log_row)
+
+        # ADB settings removed
 
         # OK/Cancel buttons
         btn_row = QHBoxLayout()
@@ -692,14 +725,22 @@ class BackupApp(QWidget):
         layout.addLayout(btn_row)
 
         def accept():
+            self.log_dir = entry.text()
             self.save_settings()
+            # Enable/disable log checkbox in main window
+            if hasattr(self, 'checkbox_log'):
+                if self.log_dir:
+                    self.checkbox_log.setEnabled(True)
+                    self.checkbox_log.setToolTip("Log file will be created at the specified path.")
+                else:
+                    self.checkbox_log.setEnabled(False)
+                    self.checkbox_log.setToolTip("Specify a log file path in Settings to enable logging.")
             dlg.accept()
         def reject():
             dlg.reject()
         ok_btn.clicked.connect(accept)
         cancel_btn.clicked.connect(reject)
 
-        dlg.setLayout(layout)
         dlg.exec_()
 
     def show_help_dialog(self):
@@ -709,7 +750,7 @@ class BackupApp(QWidget):
     def show_help_log_dialog(self):
         msg = QMessageBox(self)
         msg.setWindowTitle(HELP_LOG_TITLE)
-        msg.setTextFormat(Qt.RichText)
+        msg.setTextFormat(Qt.RichText)  # type: ignore[attr-defined]
         msg.setText(HELP_LOG_TEXT)
         msg.setIcon(QMessageBox.Information)
         msg.exec_()
@@ -718,7 +759,7 @@ class BackupApp(QWidget):
     def show_help_actions_dialog(self):
         msg = QMessageBox(self)
         msg.setWindowTitle(HELP_ACTIONS_TITLE)
-        msg.setTextFormat(Qt.RichText)
+        msg.setTextFormat(Qt.RichText)  # type: ignore[attr-defined]
         msg.setText(HELP_ACTIONS_TEXT)
         msg.setIcon(QMessageBox.Information)
         msg.exec_()

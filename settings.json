@@ -3,10 +3,11 @@
         1423,
         572
     ],
-    "source_dir": "C:/TestDataForBackup",
-    "destination_dir": "F:/TestData_2",
+    "source_dir": "E:/Camera Downloads",
+    "destination_dir": "D:/Camera Downloads",
     "create_log": true,
-    "log_dir": "F:/2025-08-30.txt",
+    "log_dir": "D:/2025-09-29.txt",
     "mirror": false,
-    "selected_action": "Sync"
+    "selected_action": "Copy",
+    "keep_archive_sessions": 5
 }
